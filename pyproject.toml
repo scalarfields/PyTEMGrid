@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "PyTEMGrid"
+version = "1.0.0"
+authors = [
+  { name="Martina Chirico", email="martina.chirico@uniroma1.it" },
+]
+description = "A Validated SEM Approach for Measuring the Electron Transparency of Graphene on TEM Grids"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "scikit-learn",
+    "matplotlib",
+    "scipy",
+    "pandas",
+    "tifffile",
+    "scikit-image"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/scalarfields/PyTEMGrid"
+
+# --- LA MAGIA CHE RISOLVE L'ERRORE ---
+[tool.setuptools.packages.find]
+include = ["PyTEMGrid"]

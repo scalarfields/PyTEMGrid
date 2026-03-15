@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+PyTEMGrid/ancillary.py
+PyTEMGrid/tem_grid.py
+PyTEMGrid.egg-info/PKG-INFO
+PyTEMGrid.egg-info/SOURCES.txt
+PyTEMGrid.egg-info/dependency_links.txt
+PyTEMGrid.egg-info/requires.txt
+PyTEMGrid.egg-info/top_level.txt
