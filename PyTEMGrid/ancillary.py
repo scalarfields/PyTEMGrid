@@ -4,9 +4,54 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import davies_bouldin_score
-from tem_grid import circularize_holes
 from skimage.filters import threshold_li
 from skimage.filters import threshold_yen
+from skimage import measure, draw, morphology
+
+def circularize_holes(mask, radius, move_center = False):
+            """" 
+            Improves the holes mask by substituting the holes with areas in [700, 1800] with circles whose area is randomly
+            extracted from the mean and std you provide through the radius parameter. Additionally, it is possible to add a random shift 
+            to the substituing circles activating the move_center flag.
+
+            Parameters
+            ----------
+            mask : (M, N) ndarray of bool
+                2D boolean array defining the hole mask.
+            radius : sequence of float or ndarray of shape (2,)
+                Mean and standard deviation of the circle radius. 
+            move_center : bool, optional
+                If True, randomly shifts the center of each replacement circle.
+            
+            Returns
+            ----------
+            circularized: (M,N) ndarray of bool
+                new mask after circularization operations
+            """
+            if not isinstance(radius, (list, tuple, np.ndarray)) or len(radius) != 2:
+                raise ValueError("The 'radius' parameter must be a sequence of two values: (mean, std).")
+            
+            labeled_mask = measure.label(mask)
+            circularized = np.zeros_like(mask)
+
+            for region in measure.regionprops(labeled_mask):
+                if region.area < 700 or region.area > 1800:  # skip very small objects
+                    for coord in region.coords:
+                        circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
+                    continue
+
+                # Get center and approximate radius
+                cy, cx = region.centroid
+                if move_center:
+                    cy+= np.random.normal(0,1.5)
+                    cx+= np.random.normal(0,1.5)
+                #radius = np.sqrt(region.area / np.pi)
+                r = np.random.normal(radius[0], radius[1])
+                # Create circular hole
+                rr, cc = draw.disk((cy, cx), r , shape=mask.shape)
+                circularized[rr, cc] = 1
+
+            return circularized.astype(bool)
 
 def adaptive_thresh(grid_obj, block_size, shift, radius = None, move = False):
         """ 

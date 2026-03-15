@@ -1,5 +1,6 @@
 README.md
 pyproject.toml
+PyTEMGrid/__init__.py
 PyTEMGrid/ancillary.py
 PyTEMGrid/tem_grid.py
 PyTEMGrid.egg-info/PKG-INFO

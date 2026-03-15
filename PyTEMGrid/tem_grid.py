@@ -1,17 +1,12 @@
 import cv2
 import numpy as np
-import sklearn
-from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.metrics import davies_bouldin_score
 import scipy.ndimage as ndi
 import os
 import subprocess
 import pandas as pd
 import tifffile
 from skimage import measure, draw, morphology
-
 from skimage.filters import threshold_triangle
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
