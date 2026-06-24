@@ -13,6 +13,3 @@ PyTEMGrid is a Python package designed to automate the characterization of Trans
 ## Installation (Private Repository)
 Currently, PyTEMGrid is under embargo pending publication. To install it, you must be added as a collaborator to this repository.
 
-1. Clone the repository to your local machine:
-   ```bash
-   git clone [https://github.com/scalarfields/PyTEMGrid.git](https://github.com/scalarfields/PyTEMGrid.git)
