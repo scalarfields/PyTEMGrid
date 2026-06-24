@@ -13,6 +13,8 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 import matplotlib.ticker as ticker
 import shutil
+from scipy.fft import fft2, ifft2, fftshift
+from skimage.feature import peak_local_max
 
 def get_pytemgrid_style():
     """Restituisce il dizionario di stile, controllando se LaTeX è disponibile."""
@@ -353,6 +355,105 @@ class tem_grid_image:
             df = pd.DataFrame(columns=['label','area','perimeter','circularity','centroid_x','centroid_y','major_axis', 'minor_axis', 'bbox'])
         return df, labeled
 
+    def compute_unit_cell_area(self, min_distance=20, pixel_size=1.0, show_plot=False):
+        """
+        Computes the area of the unit cell of the periodic grid using 2D autocorrelation.
+
+        Parameters
+        ----------
+        min_distance : int, optional
+            Minimum distance (in pixels) between peaks in the autocorrelation image.
+            Adjust this based on the expected periodicity/hole spacing of your grid. (default = 20)
+        pixel_size : float, optional
+            Physical size of one pixel. The computed area will be multiplied by pixel_size**2. (default = 1.0)
+        show_plot : bool, optional
+            If True, displays the autocorrelation image with the identified vectors. (default = False)
+
+        Returns
+        -------
+        area_physical : float
+            The computed area of the unit cell in your physical units squared.
+        vectors : tuple
+            The two fundamental lattice vectors (v1, v2) in pixels.
+        """
+        # 1. Compute 2D Autocorrelation using FFT
+        # Subtract mean to remove the zero-frequency DC component dominance
+        img_mean_zero = self.image - np.mean(self.image)
+
+        # FFT -> Power Spectrum -> IFFT -> Shift center
+        f_transform = fft2(img_mean_zero)
+        power_spectrum = np.abs(f_transform)**2
+        autocorr = np.real(ifft2(power_spectrum))
+        autocorr_shifted = fftshift(autocorr)
+
+        # Normalize for easier visualization and peak finding
+        autocorr_norm = autocorr_shifted / np.max(autocorr_shifted)
+
+        # 2. Find peaks in the autocorrelation image
+        peaks = peak_local_max(autocorr_norm, min_distance=min_distance)
+
+        if len(peaks) < 3:
+             raise ValueError("Could not find enough peaks to determine lattice vectors. Try decreasing min_distance.")
+
+        # 3. Identify the central peak (due to fftshift, it should be in the middle)
+        center_y, center_x = np.array(autocorr_norm.shape) // 2
+
+        # 4. Calculate distances from the center to all peaks
+        distances = np.linalg.norm(peaks - [center_y, center_x], axis=1)
+
+        # 5. Sort peaks by distance (skip index 0, which is the center peak itself)
+        sorted_indices = np.argsort(distances)
+        
+        v1 = None
+        v2 = None
+
+        # 6. Find two linearly independent vectors closest to the center
+        for idx in sorted_indices[1:]:
+            peak = peaks[idx]
+            # Create vector from center to peak: (x, y) format
+            vec = np.array([peak[1] - center_x, peak[0] - center_y]) 
+
+            if v1 is None:
+                v1 = vec
+            elif v2 is None:
+                # Check for linear independence using the cross product
+                cross_prod = np.abs(np.cross(v1, vec))
+                norm_v1 = np.linalg.norm(v1)
+                norm_vec = np.linalg.norm(vec)
+                
+                # To prevent picking the parallel/anti-parallel vector (e.g., -v1), 
+                # we ensure the angle between them is large enough (sin(theta) > 0.2, approx 11.5 deg)
+                if (cross_prod / (norm_v1 * norm_vec)) > 0.2: 
+                    v2 = vec
+                    break
+
+        if v1 is None or v2 is None:
+            raise ValueError("Could not find two linearly independent lattice vectors. Check your image periodicity or min_distance.")
+
+        # 7. Compute the unit cell area (in pixel squared)
+        area_pixels = np.abs(np.cross(v1, v2))
+
+        # Convert to physical units
+        area_physical = area_pixels * (pixel_size ** 2)
+
+        # Optional: Plotting for verification
+        if show_plot:
+            with plt.rc_context(get_pytemgrid_style()):
+                fig, ax = plt.subplots(figsize=(6, 6))
+                # Log scale often helps visualize the autocorrelation better
+                ax.imshow(np.log1p(np.abs(autocorr_norm)), cmap='magma')
+                
+                # Draw the vectors
+                ax.quiver(center_x, center_y, v1[0], v1[1], color='cyan', angles='xy', scale_units='xy', scale=1, label=r'$\vec{a}$')
+                ax.quiver(center_x, center_y, v2[0], v2[1], color='lime', angles='xy', scale_units='xy', scale=1, label=r'$\vec{b}$')
+                ax.scatter(center_x, center_y, color='red', marker='x', s=100) # Center
+                
+                ax.set_title(f"Autocorrelation\nArea: {area_physical:.2f}")
+                ax.legend()
+                ax.axis('off')
+                plt.show()
+
+        return area_physical, (v1, v2)
   
     
     
@@ -481,7 +582,7 @@ class holes_image(tem_grid_image):
         return self.covered, self.uncovered, otsu_threshold
     
      
-    def histo_areas(self, areas, n_bins = 28):
+    def histo_areas(self, areas, n_bins = 28, p0 = [1/np.sqrt(2*np.pi*50), 1480, 50, 0]):
         """ 
         plots the histogram of the measured areas and fits it with a gaussian distribution
 
@@ -511,7 +612,7 @@ class holes_image(tem_grid_image):
             bins, edges, _ = ax.hist(areas, bins=n_bins, range=(np.min(areas), np.max(areas)),  weights = weights, alpha=0.6)
             binsize = edges[1]-edges[0]
             x = edges[1:]-0.5*binsize
-            popt, pcov = curve_fit(gauss, x, bins, p0 = [1/np.sqrt(2*np.pi*50), 1480, 50, 0])
+            popt, pcov = curve_fit(gauss, x, bins, p0 = p0)
             x = np.arange(np.min(areas), np.max(areas), 1)
             ax.plot ( x, gauss(x, *popt), color='navy')
             plt.axvline(popt[1], -0.01, 1, linestyle="--", color='navy')

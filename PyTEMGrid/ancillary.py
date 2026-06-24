@@ -8,6 +8,7 @@ from skimage.filters import threshold_li
 from skimage.filters import threshold_yen
 from skimage import measure, draw, morphology
 
+
 def circularize_holes(mask, radius, move_center = False):
             """" 
             Improves the holes mask by substituting the holes with areas in [700, 1800] with circles whose area is randomly
