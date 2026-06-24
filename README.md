@@ -10,6 +10,5 @@ PyTEMGrid is a Python package designed to automate the characterization of Trans
 * **Coverage Analysis:** Built-in thresholding methods (Otsu, Triangle, Saddle-point) to differentiate bare holes from graphene-covered areas.
 * **Preprocessing Toolkit:** Customizable filters (Median, Gaussian, CLAHE) to generalize the method across different SEM datasets and noise profiles.
 
-## Installation (Private Repository)
-Currently, PyTEMGrid is under embargo pending publication. To install it, you must be added as a collaborator to this repository.
+
 
