@@ -11,4 +11,9 @@ PyTEMGrid is a Python package designed to automate the characterization of Trans
 * **Preprocessing Toolkit:** Customizable filters (Median, Gaussian, CLAHE) to generalize the method across different SEM datasets and noise profiles.
 
 
-
+## Install
+```
+git clone https://github.com/scalarfields/PyTEMGrid.git
+cd PyTEMGrid
+pip install .
+```
