@@ -7,54 +7,75 @@ from sklearn.metrics import davies_bouldin_score
 from skimage.filters import threshold_li
 from skimage.filters import threshold_yen
 from skimage import measure, draw, morphology
+from dataclasses import dataclass
 
 
-def circularize_holes(mask, radius, move_center = False):
-            """" 
-            Improves the holes mask by substituting the holes with areas in [700, 1800] with circles whose area is randomly
-            extracted from the mean and std you provide through the radius parameter. Additionally, it is possible to add a random shift 
-            to the substituing circles activating the move_center flag.
+@dataclass
+class QualityCuts:
+    min_circ: float = 0.92
+    max_circ: float = 1
+    min_area: float = 1200
+    max_area: float = 1800
+    abs_min: float = 700
+    abs_max: float = 2500
 
-            Parameters
-            ----------
-            mask : (M, N) ndarray of bool
-                2D boolean array defining the hole mask.
-            radius : sequence of float or ndarray of shape (2,)
-                Mean and standard deviation of the circle radius. 
-            move_center : bool, optional
-                If True, randomly shifts the center of each replacement circle.
-            
-            Returns
-            ----------
-            circularized: (M,N) ndarray of bool
-                new mask after circularization operations
-            """
-            if not isinstance(radius, (list, tuple, np.ndarray)) or len(radius) != 2:
-                raise ValueError("The 'radius' parameter must be a sequence of two values: (mean, std).")
-            
-            labeled_mask = measure.label(mask)
-            circularized = np.zeros_like(mask)
+def circularize_holes(mask, area,  cuts: QualityCuts,  move_center = False):
+    """" 
+    Improves the holes mask by substituting the holes with areas outside quality cuts with circles whose area is randomly
+    extracted from the mean and std you provide through the area parameters. Additionally, it is possible to add a random shift 
+    to the substituing circles activating the move_center flag.
 
-            for region in measure.regionprops(labeled_mask):
-                if region.area < 700 or region.area > 1800:  # skip very small objects
-                    for coord in region.coords:
-                        circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
-                    continue
+    Parameters
+    ----------
+    mask : (M, N) ndarray of bool
+        2D boolean array defining the hole mask.
+    area : sequence of float or ndarray of shape (2,)
+        Mean and standard deviation of the circle area.
+    cuts : QualityCuts
+        Data class containing the quality cuts for area and circularity.
+    move_center : bool, optional
+        If True, randomly shifts the center of each replacement circle.
+    
+    Returns
+    ----------
+    circularized: (M,N) ndarray of bool
+        new mask after circularization operations
+    """
+    if not isinstance(area, (list, tuple, np.ndarray)) or len(area) != 2:
+        raise ValueError("The 'area' parameter must be a sequence of two values: (mean, std).")
+    labeled_mask = measure.label(mask)
+    circularized = np.zeros_like(mask)
 
-                # Get center and approximate radius
-                cy, cx = region.centroid
-                if move_center:
-                    cy+= np.random.normal(0,1.5)
-                    cx+= np.random.normal(0,1.5)
-                #radius = np.sqrt(region.area / np.pi)
-                r = np.random.normal(radius[0], radius[1])
-                # Create circular hole
-                rr, cc = draw.disk((cy, cx), r , shape=mask.shape)
-                circularized[rr, cc] = 1
+    for region in measure.regionprops(labeled_mask):
+        if region.area < cuts.abs_min or region.area > cuts.abs_max:  # skip very small objects
+            for coord in region.coords:
+                circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
+            continue
+        perimeter = region.perimeter if region.perimeter > 0 else np.nan
+        circularity = 4 * np.pi * region.area / (perimeter ** 2) if perimeter > 0 else 0
+        passes_area = (cuts.min_area <= region.area <= cuts.max_area)
+        passes_circ = (cuts.min_circ <= circularity <= cuts.max_circ)
+        if passes_area and passes_circ:
+            for coord in region.coords:
+                circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
+            continue
+        # Get center and approximate radius
+        cy, cx = region.centroid
+        if move_center:
+            cy+= np.random.normal(0,1.5)
+            cx+= np.random.normal(0,1.5)
+        a = np.random.normal(area[0], area[1])
+        r = np.sqrt(a / np.pi)
+        #r = np.random.normal(radius[0], radius[1])
+        rr, cc = draw.disk((cy, cx), r , shape=mask.shape)
+        circularized[rr, cc] = 1
 
-            return circularized.astype(bool)
+    return circularized.astype(bool)
 
-def adaptive_thresh(grid_obj, block_size, shift, radius = None, move = False):
+
+
+
+def adaptive_thresh(grid_obj, block_size, shift, area = None, cuts = None, move = False):
         """ 
         adaptive threshold routine that can be used for holes extraction from the grid. Works on images where the grid rim and noise or dirt are cut and put to zero. 
         (this has to be done before instantiating the tem_grid_image object, with fiji, for example). 
@@ -71,9 +92,11 @@ def adaptive_thresh(grid_obj, block_size, shift, radius = None, move = False):
         shift: int
             offset to apply to the threshold computed in the block for each pixel
 
-        radius: sequence of float or ndarray of shape (2,), default = None
-            if radius is provided, the circularize_holes_function is called with the values provided in radius and
+        area: sequence of float or ndarray of shape (2,), default = None
+            if area is provided, the circularize_holes_function is called with the values provided in area and
             other arguments set to their default values. If it is None, no other operation is performed on the image
+        cuts : QualityCuts
+                Data class containing the quality cuts for area and circularity.   
         move: bool, default = False
             if move is set to true, the move_center flag of circularize holes is activated if radius is not none
 
@@ -91,10 +114,12 @@ def adaptive_thresh(grid_obj, block_size, shift, radius = None, move = False):
         grid_obj.holes = np.zeros_like(grid_obj.image)  
         grid_obj.grid = np.zeros_like(grid_obj.image)
         
-        if radius is not None:
+        if area is not None:
             normalized_mask = (mask / 255).astype(bool)
             normalized_mask = (~normalized_mask).astype(int)
-            new_mask = circularize_holes(normalized_mask, radius, move_center=move)
+            if cuts is None:
+                cuts = QualityCuts()
+            new_mask = circularize_holes(normalized_mask, area, cuts, move_center=move)
             grid_obj.grid[~new_mask] = grid_obj.image[~new_mask]  
             grid_obj.holes[new_mask] = grid_obj.image[new_mask]
         else:
@@ -142,7 +167,7 @@ def li_threshold(holes_obj):
 
         holes_obj.covered[above_mask] = holes_obj.image[above_mask]
         holes_obj.uncovered[below_mask] = holes_obj.image[below_mask]
-        print("li thresh", li_threshold)
+        #print("li thresh", li_threshold)
 
         return holes_obj.covered, holes_obj.uncovered, li_threshold
 
@@ -178,6 +203,6 @@ def yen_threshold(holes_obj):
 
         holes_obj.covered[above_mask] = holes_obj.image[above_mask]
         holes_obj.uncovered[below_mask] = holes_obj.image[below_mask]
-        print("yen thresh", yen_threshold)
+        #print("yen thresh", yen_threshold)
 
         return holes_obj.covered, holes_obj.uncovered, yen_threshold

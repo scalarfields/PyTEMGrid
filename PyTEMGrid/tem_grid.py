@@ -15,6 +15,7 @@ import matplotlib.ticker as ticker
 import shutil
 from scipy.fft import fft2, ifft2, fftshift
 from skimage.feature import peak_local_max
+from dataclasses import dataclass
 
 def get_pytemgrid_style():
     """Restituisce il dizionario di stile, controllando se LaTeX è disponibile."""
@@ -54,18 +55,29 @@ def get_pytemgrid_style():
         
     return style
 
-def circularize_holes(mask, radius, move_center = False):
+@dataclass
+class QualityCuts:
+    min_circ: float = 0.92
+    max_circ: float = 1
+    min_area: float = 1200
+    max_area: float = 1800
+    abs_min: float = 700
+    abs_max: float = 2500
+
+def circularize_holes(mask, area,  cuts: QualityCuts,  move_center = False):
     """" 
-    Improves the holes mask by substituting the holes with areas in [700, 1800] with circles whose area is randomly
-    extracted from the mean and std you provide through the radius parameter. Additionally, it is possible to add a random shift 
+    Improves the holes mask by substituting the holes with areas outside quality cuts with circles whose area is randomly
+    extracted from the mean and std you provide through the area parameters. Additionally, it is possible to add a random shift 
     to the substituing circles activating the move_center flag.
 
     Parameters
     ----------
     mask : (M, N) ndarray of bool
         2D boolean array defining the hole mask.
-    radius : sequence of float or ndarray of shape (2,)
-        Mean and standard deviation of the circle radius. 
+    area : sequence of float or ndarray of shape (2,)
+        Mean and standard deviation of the circle area.
+    cuts : QualityCuts
+        Data class containing the quality cuts for area and circularity.
     move_center : bool, optional
         If True, randomly shifts the center of each replacement circle.
     
@@ -74,25 +86,32 @@ def circularize_holes(mask, radius, move_center = False):
     circularized: (M,N) ndarray of bool
         new mask after circularization operations
     """
-    if not isinstance(radius, (list, tuple, np.ndarray)) or len(radius) != 2:
-        raise ValueError("The 'radius' parameter must be a sequence of two values: (mean, std).")
+    if not isinstance(area, (list, tuple, np.ndarray)) or len(area) != 2:
+        raise ValueError("The 'area' parameter must be a sequence of two values: (mean, std).")
     labeled_mask = measure.label(mask)
     circularized = np.zeros_like(mask)
 
     for region in measure.regionprops(labeled_mask):
-        if region.area < 700 or region.area > 1800:  # skip very small objects
+        if region.area < cuts.abs_min or region.area > cuts.abs_max:  # skip very small objects
             for coord in region.coords:
                 circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
             continue
-
+        perimeter = region.perimeter if region.perimeter > 0 else np.nan
+        circularity = 4 * np.pi * region.area / (perimeter ** 2) if perimeter > 0 else 0
+        passes_area = (cuts.min_area <= region.area <= cuts.max_area)
+        passes_circ = (cuts.min_circ <= circularity <= cuts.max_circ)
+        if passes_area and passes_circ:
+            for coord in region.coords:
+                circularized[coord[0], coord[1]] = mask[coord[0], coord[1]]
+            continue
         # Get center and approximate radius
         cy, cx = region.centroid
         if move_center:
             cy+= np.random.normal(0,1.5)
             cx+= np.random.normal(0,1.5)
-        #radius = np.sqrt(region.area / np.pi)
-        r = np.random.normal(radius[0], radius[1])
-        # Create circular hole
+        a = np.random.normal(area[0], area[1])
+        r = np.sqrt(a / np.pi)
+        #r = np.random.normal(radius[0], radius[1])
         rr, cc = draw.disk((cy, cx), r , shape=mask.shape)
         circularized[rr, cc] = 1
 
@@ -293,7 +312,7 @@ class tem_grid_image:
         return filtered
 
         
-    def analyze_particles(self, min_thresh = 1, min_size=1200, max_size=1800, min_circ=0.92, max_circ=1.0):
+    def analyze_particles(self, min_thresh = 1, cuts: QualityCuts = None):
         """
         Replicate Fiji's 'Analyze Particles' tool on a binary image.
 
@@ -302,15 +321,9 @@ class tem_grid_image:
         min_thresh : int, optional
             threshold value to be applied to the tem_grid_image object (default = 1).
             If to be applied to an holes image, keep default value.
-        min_size : float, optional
-            Minimum area (in pixels) of particles to keep (default = 1200).
-        max_size : float, optional
-            Maximum area (in pixels) of particles to keep (default = 1800).
-        min_circ : float, optional
-            Minimum circularity threshold (default = 0.92).
-        max_circ : float, optional
-            Maximum circularity threshold (default = 1).
-
+        cuts : QualityCuts, optional
+            Data class containing the quality cuts for area and circularity (default = QualityCuts()).
+        
         Returns
         -------
         results : pandas.DataFrame
@@ -333,9 +346,11 @@ class tem_grid_image:
             circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
             #print(area, perimeter, circularity)
 
-            if not (min_size <= area <= max_size):
+            if cuts is None:
+                cuts = QualityCuts()
+            if not (cuts.min_area <= area <= cuts.max_area):
                 continue
-            if not (min_circ <= circularity <= max_circ):
+            if not (cuts.min_circ <= circularity <= cuts.max_circ):
                 continue
 
             data.append({
@@ -480,7 +495,7 @@ class tem_grid_image:
         
  
        
-    def watershed(self, k=0.3, radius = None, move = False):
+    def watershed(self, k=0.3, area = None, cuts: QualityCuts = None, move = False):
         """
         Marker-based watershed routine to separate the holes from the grid. DOES NOT work if the grid rim or 
         anything else is cut from the image. This makes it more sensible to dirt and sample irregularities, but it
@@ -491,11 +506,13 @@ class tem_grid_image:
         -----------
             k: float in (0, 1], default = 0.3
                 this parameter tells you how strict you want to be when identifying the sure foreground objects. The greater it is, the stricter you are.
-            radius: sequence of float or ndarray of shape (2,), default = None
-                if radius is provided, the circularize_holes_function is called with the values provided in radius and
+            area: sequence of float or ndarray of shape (2,), default = None
+                if area is provided, the circularize_holes_function is called with the values provided in area and
                 other arguments set to their default values. If it is None, no other operation is performed on the image
+            cuts: QualityCuts, default = None
+                Data class containing the quality cuts for area and circularity.
             move: bool, default = False
-                if move is set to true, the move_center flag of circularize holes is activated if radius is not none
+                if move is set to true, the move_center flag of circularize holes is activated if area is not none
 
         Returns
         --------
@@ -516,7 +533,7 @@ class tem_grid_image:
         dist = cv2.distanceTransform(bin_img, cv2.DIST_L2, 5)
         ret, sure_fg = cv2.threshold(dist, k * dist.max(), 255, cv2.THRESH_BINARY)
         sure_fg = sure_fg.astype(np.uint8) 
-        unknown = cv2.subtract(sure_bg, sure_fg)
+        unknown = cv2.subtract( sure_bg, sure_fg)
         ret, markers = cv2.connectedComponents(sure_fg)
         markers += 1
         markers[unknown == 255] = 0
@@ -527,10 +544,12 @@ class tem_grid_image:
         self.grid = np.zeros_like(self.image)
         
         
-        if radius is not None:
+        if area is not None:
             #normalized_mask = (mask / 255).astype(bool)
             #normalized_mask = (~normalized_mask).astype(int)
-            mask = circularize_holes(mask, radius, move_center=move)
+            if cuts is None:
+                cuts = QualityCuts()
+            mask = circularize_holes(mask, area, cuts, move_center=move)
             self.grid[~mask] = self.image[~mask]  
             self.holes[mask] = self.image[mask]
         else:
@@ -577,7 +596,7 @@ class holes_image(tem_grid_image):
 
         self.covered[above_mask] = self.image[above_mask]
         self.uncovered[below_mask] = self.image[below_mask]
-        print("otsu", otsu_threshold)
+        #print("otsu", otsu_threshold)
 
         return self.covered, self.uncovered, otsu_threshold
     
@@ -658,7 +677,7 @@ class holes_image(tem_grid_image):
 
         self.covered[above_mask] = self.image[above_mask]
         self.uncovered[below_mask] = self.image[below_mask]
-        print("triangle thresh", triangle_threshold)
+        
 
         return self.covered, self.uncovered, triangle_threshold
     
@@ -726,9 +745,11 @@ class holes_image(tem_grid_image):
         coverage: int
             the coverage value
         """
-        if self.covered is None:
-            raise ValueError("Covered pixels mask not found. Please run a thresholding method (e.g., otsu_threshold) first, or provide a 'thresh' value.")
+        
         if thresh == None:
+            if self.covered is None:
+                raise ValueError("Covered pixels mask not found. Please run a thresholding method (e.g., otsu_threshold) first, or provide a 'thresh' value.")
+
             bins_holes, edges_holes = np.histogram(self.image.flatten(), bins=256, range=(0, 256))
             bins_covered, edges_covered = np.histogram(self.covered.flatten(), bins=256, range=(0, 256))
             return sum(bins_covered[1:])/sum(bins_holes[1:])
